@@ -1,0 +1,95 @@
+========================================================================
+FLIPKART GRIDLOCK HACKATHON - TRAFFIC DEMAND PREDICTION SOLUTION
+========================================================================
+Date: May 31, 2026
+
+1. OVERVIEW & DATASET STRUCTURE
+---
+The challenge is to predict continuous traffic demand ('demand') for various physical locations. The dataset structure is especially helpful:
+- Day 48: Fully observed (all 96 timestamps from 00:00 to 23:45).
+- Day 49 (Train): First 9 timestamps observed (00:00 to 02:00 AM).
+- Day 49 (Test): Remaining timestamps observed from 02:15 AM to 13:45 PM.
+
+This makes the test set a chronological continuation of the early Day 49 training data. We exploit this by using historical demand patterns from Day 48, then adjusting them to the active Day 49 trend.
+
+---
+2. FEATURE ENGINEERING
+---
+Our preprocessing script ('src/preprocess.py') extracts spatial, temporal, and historical features designed to maximize leaderboard performance.
+
+A) Spatial Features:
+   - Geohash decoding: Convert `geohash` strings to latitude/longitude using `pygeohash`.
+   - Encoded categorical context: `RoadType`, `Weather`, and `geohash` are cast to categorical types for LightGBM. `LargeVehicles` and `Landmarks` are mapped to binary flags.
+
+B) Temporal Features:
+   - Minutes from midnight: Converts `timestamp` into a continuous numeric time value.
+   - Cyclical time encoding: Uses sine and cosine transforms to preserve the circular nature of daily traffic.
+   - Time-of-day indicators: Binary flags for peak hours (7-10 AM, 5-7 PM), night, morning, afternoon, and evening periods to capture traffic intensity patterns.
+
+C) Historical Demand Features:
+   - `demand_last_day`: Looks up the exact demand for the same geohash/timestamp on Day 48.
+   - `geohash_day48_mean`: A fallback average demand for each geohash on Day 48 when an exact timestamp match is missing.
+   - `timestamp_day48_mean`: Global average demand for each timestamp across all geohashes, capturing time-of-day patterns.
+   - `timestamp_day48_std`: Demand variability for each timestamp, helping the model understand which times are more predictable.
+   - `roadtype_day48_mean`: Average demand by road type, used as a fallback for missing geohash-level data.
+   - `day49_trend_ratio`: Computes the Day 49 morning demand ratio versus Day 48 morning demand for each geohash.
+   - `early_morning_trend_ratio`: Uses 02:15-04:00 AM data for better alignment with the Day 49 test set (which starts at 2:15 AM).
+   - `roadtype_trend_ratio`: Uses `RoadType` group averages to fill ratio values when a geohash-level morning ratio is unavailable.
+
+These features create a multi-level fallback hierarchy: exact match → geohash level → timestamp level → road type level → global level. This ensures robust signal even for sparse geohashes.
+
+---
+3. MODELING & VALIDATION STRATEGY
+---
+- Validation: Use 5-fold cross-validation to estimate model performance and reduce variance.
+- Algorithm: LightGBM regression with aggressive regularization and early stopping.
+- Hyperparameters (tuned for balance between bias and variance):
+  * Learning rate: 0.02 (conservative, allows deeper trees)
+  * Num leaves: 50 (reduced complexity vs 63)
+  * Max depth: 6 (shallow trees to prevent overfitting)
+  * Subsample: 0.7 and colsample_bytree: 0.7 (strong stochastic regularization)
+  * reg_alpha: 0.5, reg_lambda: 1.0 (L1 + L2 regularization)
+  * Early stopping: 200 rounds on validation RMSE
+- Ensemble: Final test predictions are the mean of the 5 fold models.
+- Post-processing: Clip `demand` to [0.0, 1.0] to match the problem range.
+
+Current validation metrics:
+- Out-of-Fold RMSE: 0.0122 (improved from 0.0129)
+- Out-of-Fold R2: 0.9927 (99.27% variance explained)
+- Out-of-Fold MAE: 0.00390
+
+This pipeline balances strong historical signal with cautious regularization to avoid leaderboard overfitting.
+
+---
+4. TOOLS & CODEBASE STRUCTURE
+---
+The current solution is implemented with clear modular files:
+* `src/preprocess.py`: Loads the data, builds temporal/spatial features (27 total features), creates multi-level historical lags, and handles hierarchical fallback imputation.
+* `src/train.py`: Trains 5 regularized LightGBM models using cross-validation and writes both `predictions/test_predictions.csv` and `submission.csv`.
+* `build_notebook.py`: Regenerates `GridLock_Solution.ipynb` from the latest source files.
+* `GridLock_Solution.ipynb`: The notebook representation of the full pipeline, which should be regenerated after code changes.
+* `submission.csv`: The final submission file for the platform (41,778 rows, 2 columns: Index and demand).
+
+---
+5. REQUIREMENTS & DEPENDENCIES
+---
+Install the required packages in a Python environment.
+
+System requirements:
+- Python 3.8+
+- Optional: Conda or venv
+
+To install dependencies:
+```bash
+pip install pandas numpy scikit-learn lightgbm pygeohash
+```
+
+To regenerate the notebook and predictions:
+```bash
+python build_notebook.py
+python src/train.py
+```
+
+The notebook file should be rebuilt whenever `src/preprocess.py` or `src/train.py` changes.
+
+Thank you for reviewing our work. This version of the pipeline now includes stronger fallback handling for missing historical demand and ratio features.

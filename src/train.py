@@ -45,13 +45,15 @@ def train_model():
             'objective': 'regression',
             'metric': 'rmse',
             'boosting_type': 'gbdt',
-            'n_estimators': 3000,
-            'learning_rate': 0.05,
-            'num_leaves': 63,
-            'max_depth': 8,
-            'min_child_samples': 20,
-            'subsample': 0.8,
-            'colsample_bytree': 0.8,
+            'n_estimators': 5000,
+            'learning_rate': 0.02,
+            'num_leaves': 50,
+            'max_depth': 6,
+            'min_child_samples': 30,
+            'subsample': 0.7,
+            'colsample_bytree': 0.7,
+            'reg_alpha': 0.5,
+            'reg_lambda': 1.0,
             'random_state': 42 + fold,
             'verbose': -1,
             'n_jobs': -1
@@ -63,7 +65,7 @@ def train_model():
             train_data,
             valid_sets=[train_data, val_data],
             callbacks=[
-                lgb.early_stopping(stopping_rounds=100, verbose=False),
+                lgb.early_stopping(stopping_rounds=200, verbose=False),
                 lgb.log_evaluation(period=200)
             ]
         )

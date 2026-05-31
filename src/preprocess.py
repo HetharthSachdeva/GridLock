@@ -28,6 +28,13 @@ def load_and_preprocess_data(train_path="dataset/train.csv", test_path="dataset/
     full_df['sin_time'] = np.sin(2 * np.pi * full_df['minutes'] / 1440.0)
     full_df['cos_time'] = np.cos(2 * np.pi * full_df['minutes'] / 1440.0)
     
+    # Additional temporal features
+    full_df['is_peak_hour'] = ((full_df['hour'] >= 7) & (full_df['hour'] <= 10)) | ((full_df['hour'] >= 17) & (full_df['hour'] <= 19))
+    full_df['is_night'] = (full_df['hour'] < 6) | (full_df['hour'] >= 22)
+    full_df['is_morning'] = (full_df['hour'] >= 6) & (full_df['hour'] < 12)
+    full_df['is_afternoon'] = (full_df['hour'] >= 12) & (full_df['hour'] < 17)
+    full_df['is_evening'] = (full_df['hour'] >= 17) & (full_df['hour'] < 22)
+    
     # 2. Geohash decoding (Spatial features)
     print("Decoding geohashes...")
     # Cache geohash coordinates to speed up computation
@@ -50,16 +57,53 @@ def load_and_preprocess_data(train_path="dataset/train.csv", test_path="dataset/
     day48_lookup = df_48.groupby(['geohash', 'timestamp'])['demand'].mean().reset_index()
     day48_lookup.rename(columns={'demand': 'demand_last_day'}, inplace=True)
     
+    # Also compute a geohash-level historical mean for fallback imputation
+    geohash_day48_mean = df_48.groupby('geohash')['demand'].mean().reset_index()
+    geohash_day48_mean.rename(columns={'demand': 'geohash_day48_mean'}, inplace=True)
+    
+    # Compute timestamp-level statistics (temporal pattern across all geohashes)
+    timestamp_day48_mean = df_48.groupby('timestamp')['demand'].mean().reset_index()
+    timestamp_day48_mean.rename(columns={'demand': 'timestamp_day48_mean'}, inplace=True)
+    timestamp_day48_std = df_48.groupby('timestamp')['demand'].std().reset_index()
+    timestamp_day48_std.rename(columns={'demand': 'timestamp_day48_std'}, inplace=True)
+    
+    # Compute road-type level patterns
+    roadtype_day48_mean = df_48.groupby('RoadType')['demand'].mean().reset_index()
+    roadtype_day48_mean.rename(columns={'demand': 'roadtype_day48_mean'}, inplace=True)
+    
     # Merge back to full_df
     full_df = pd.merge(full_df, day48_lookup, on=['geohash', 'timestamp'], how='left')
+    full_df = pd.merge(full_df, geohash_day48_mean, on='geohash', how='left')
+    full_df = pd.merge(full_df, timestamp_day48_mean, on='timestamp', how='left')
+    full_df = pd.merge(full_df, timestamp_day48_std, on='timestamp', how='left')
+    full_df = pd.merge(full_df, roadtype_day48_mean, on='RoadType', how='left')
+    
+    # Fill missing day-48 lookups with the geohash's average demand from Day 48, then with global mean
+    global_day48_mean = df_48['demand'].mean()
+    full_df['demand_last_day'] = full_df['demand_last_day'].fillna(full_df['geohash_day48_mean'])
+    full_df['demand_last_day'] = full_df['demand_last_day'].fillna(full_df['timestamp_day48_mean'])
+    full_df['demand_last_day'] = full_df['demand_last_day'].fillna(global_day48_mean)
+    
+    # Fill timestamp stats with global if missing
+    global_timestamp_std = df_48['demand'].std()
+    full_df['timestamp_day48_std'] = full_df['timestamp_day48_std'].fillna(global_timestamp_std)
+    full_df['roadtype_day48_mean'] = full_df['roadtype_day48_mean'].fillna(global_day48_mean)
     
     # 4. Day 49 Morning Trend Ratio
     # Compute trend of demand on day 49 compared to day 48 between 00:00 and 02:00
     print("Computing Day 49 morning trend ratio...")
     morning_timestamps = ['0:0', '0:15', '0:30', '0:45', '1:0', '1:15', '1:30', '1:45', '2:0']
+    early_morning_timestamps = ['2:15', '2:30', '2:45', '3:0', '3:15', '3:30', '3:45', '4:0']
     
-    df_48_morning = train[(train['day'] == 48) & (train['timestamp'].isin(morning_timestamps))]
-    df_49_morning = train[(train['day'] == 49) & (train['timestamp'].isin(morning_timestamps))]
+    df_48_morning = train[(train['day'] == 48) & (train['timestamp'].isin(morning_timestamps))].copy()
+    df_49_morning = train[(train['day'] == 49) & (train['timestamp'].isin(morning_timestamps))].copy()
+    df_48_early = train[(train['day'] == 48) & (train['timestamp'].isin(early_morning_timestamps))].copy()
+    df_49_early = train[(train['day'] == 49) & (train['timestamp'].isin(early_morning_timestamps))].copy()
+    
+    df_48_morning['RoadType'] = df_48_morning['RoadType'].fillna('Missing')
+    df_49_morning['RoadType'] = df_49_morning['RoadType'].fillna('Missing')
+    df_48_early['RoadType'] = df_48_early['RoadType'].fillna('Missing')
+    df_49_early['RoadType'] = df_49_early['RoadType'].fillna('Missing')
     
     mean_48 = df_48_morning.groupby('geohash')['demand'].mean()
     mean_49 = df_49_morning.groupby('geohash')['demand'].mean()
@@ -67,16 +111,38 @@ def load_and_preprocess_data(train_path="dataset/train.csv", test_path="dataset/
     trend_ratio = mean_49 / (mean_48 + 1e-5)
     trend_ratio = trend_ratio.rename('day49_trend_ratio')
     
+    # Additional early morning trend for better test set alignment
+    mean_48_early = df_48_early.groupby('geohash')['demand'].mean()
+    mean_49_early = df_49_early.groupby('geohash')['demand'].mean()
+    early_trend_ratio = mean_49_early / (mean_48_early + 1e-5)
+    early_trend_ratio = early_trend_ratio.rename('early_morning_trend_ratio')
+    
+    # Group-level fallback ratios by RoadType
+    roadtype_ratio_48 = df_48_morning.groupby('RoadType')['demand'].mean()
+    roadtype_ratio_49 = df_49_morning.groupby('RoadType')['demand'].mean()
+    roadtype_ratio = (roadtype_ratio_49 / (roadtype_ratio_48 + 1e-5)).rename('roadtype_trend_ratio')
+    
+    # Global fallback ratio
+    global_ratio = df_49_morning['demand'].mean() / (df_48_morning['demand'].mean() + 1e-5)
+    
     # Map trend ratio back to full_df
     full_df = pd.merge(full_df, trend_ratio, on='geohash', how='left')
+    full_df = pd.merge(full_df, early_trend_ratio, on='geohash', how='left')
+    full_df = pd.merge(full_df, roadtype_ratio.reset_index(), on='RoadType', how='left')
     
     # For Day 48 rows, set trend ratio to 1.0 (since there is no comparison)
-    # For day 49 rows without prior morning data, fill NaN with 1.0 (no change)
     full_df.loc[full_df['day'] == 48, 'day49_trend_ratio'] = 1.0
-    full_df['day49_trend_ratio'] = full_df['day49_trend_ratio'].fillna(1.0)
+    full_df.loc[full_df['day'] == 48, 'early_morning_trend_ratio'] = 1.0
+    full_df['day49_trend_ratio'] = full_df['day49_trend_ratio'].fillna(full_df['roadtype_trend_ratio'])
+    full_df['day49_trend_ratio'] = full_df['day49_trend_ratio'].fillna(global_ratio)
+    full_df['early_morning_trend_ratio'] = full_df['early_morning_trend_ratio'].fillna(full_df['roadtype_trend_ratio'])
+    full_df['early_morning_trend_ratio'] = full_df['early_morning_trend_ratio'].fillna(global_ratio)
+    full_df['roadtype_trend_ratio'] = full_df['roadtype_trend_ratio'].fillna(global_ratio)
+    full_df['geohash_day48_mean'] = full_df['geohash_day48_mean'].fillna(global_day48_mean)
     
     # Clip extreme ratios to prevent huge outlier swings
     full_df['day49_trend_ratio'] = full_df['day49_trend_ratio'].clip(0.1, 5.0)
+    full_df['early_morning_trend_ratio'] = full_df['early_morning_trend_ratio'].clip(0.1, 5.0)
     
     # 5. Missing Value Imputation
     print("Imputing missing values...")
@@ -104,7 +170,9 @@ def load_and_preprocess_data(train_path="dataset/train.csv", test_path="dataset/
     # Define features to use
     features = [
         'latitude', 'longitude', 'minutes', 'hour',
-        'sin_time', 'cos_time', 'demand_last_day', 'day49_trend_ratio',
+        'sin_time', 'cos_time', 'is_peak_hour', 'is_night', 'is_morning', 'is_afternoon', 'is_evening',
+        'demand_last_day', 'geohash_day48_mean', 'timestamp_day48_mean', 'timestamp_day48_std', 'roadtype_day48_mean',
+        'day49_trend_ratio', 'early_morning_trend_ratio', 'roadtype_trend_ratio', 'day',
         'RoadType', 'NumberofLanes', 'LargeVehicles', 'Landmarks',
         'Temperature', 'Weather', 'geohash'
     ]
