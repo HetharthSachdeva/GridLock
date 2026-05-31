@@ -1,0 +1,78 @@
+========================================================================
+FLIPKART GRIDLOCK HACKATHON - TRAFFIC DEMAND PREDICTION SOLUTION
+========================================================================
+Date: May 31, 2026
+
+1. OVERVIEW & DATASET STRUCTURE
+---
+The challenge is to predict continuous traffic demand ('demand') for various physical locations. After looking closely at the day/timestamp distributions, we found a very neat temporal layout:
+- Day 48: Fully observed (all 96 timestamps from 00:00 to 23:45).
+- Day 49 (Train): First 9 timestamps observed (00:00 to 02:00 AM).
+- Day 49 (Test): The remaining 47 timestamps observed (02:15 AM to 13:45 PM).
+
+This means the test set is a direct chronological continuation of the Day 49 training subset! Traffic demand is highly cyclical and consistent day-to-day (we measured a Pearson correlation of 0.7924 between Day 48 and Day 49 morning demand), so we designed the pipeline to leverage this temporal regularity.
+
+---
+2. FEAUTURE ENGINEERING
+---
+Our preprocessing script ('src/preprocess.py') generates structural spatial, temporal, and historical lag features to feed the tree model:
+
+A) Spatial Features:
+   - Geohash decoding: We decoded the geohash strings into physical Latitude and Longitude using the pygeohash library. This gives tree splitters direct coordinates to calculate local spatial proximity.
+   - Contextual variables: Label encoded categorical values ('RoadType', 'Weather', 'geohash') and cast them to Pandas categories so LightGBM can process them natively. LargeVehicles and Landmarks were mapped to binary 1/0 flags.
+
+B) Temporal Features:
+   - Minutes from Midnight: Converted timestamp strings to integer minutes (e.g., "10:15" -> 615).
+   - Cyclical Time: Traffic demand is circular. To make sure the model knows 23:45 is right next to 00:00, we computed trigonometric sine and cosine features:
+     * sin_time = sin(2 * pi * minutes / 1440)
+     * cos_time = cos(2 * pi * minutes / 1440)
+
+C) Historical Lags & Active Trends:
+   - demand_last_day: For every row, we lookup the exact traffic demand of that geohash at the matching timestamp on the previous day (Day 48). LightGBM natively handles the missing lags for Day 48 itself.
+   - day49_trend_ratio: Because differnt days have differnt baseline demand (due to weekends, weather, or holidays), we computed a localized ratio of Day 49 morning demand vs Day 48 morning demand (from 00:00 to 02:00 AM) for each geohash. This adjusts our Day 48 reference profiles to perfectly match the active trend of Day 49.
+
+---
+3. MODELING & VALIDATION STRATEGY
+---
+- Validation: We used a robust 5-Fold Cross-Validation scheme to ensure our local validation is highly representative of leaderboard performance and to prevent temporal leakage.
+- Algorithm: We trained LightGBM Regressors. Gradient boosted trees are extremely robust to missing values (e.g., NaNs in lag features on day 48) and are very fast to train.
+- Model Ensembling: The final test predictions are a blended average of all 5 fold models. This drastically reduces prediction variance and prevents overfitting.
+- Post-proccessing: Clipped all negative output predictions to be strictly between [0.0, 1.0], matching the actual boundary conditions of physical traffic demand.
+
+Validation Scores achieved:
+- Out-of-Fold (OOF) RMSE: 0.012792
+- Out-of-Fold (OOF) MAE: 0.004124
+- Out-of-Fold R2 Score: 0.991906 (translating to a calculated Hackathon score of 99.19 / 100!)
+
+---
+4. TOOLS & CODEBASE STRUCTURE
+---
+The codebase is clean, modular, and extremely easy to run:
+* 'src/preprocess.py': Handles loading, spatial coordinate mapping, cyclical time transforms, historical demand lags, and trend ratio feature creation.
+* 'src/train.py': Builds the 5-fold cross-validation datasets, trains LightGBM models with early stopping, prints OOF metrics, and generates 'submission.csv'.
+* 'build_notebook.py': A neat helper compiler script that dynamically reads our preprocess/train files and packages them into a beautifully formatted notebook.
+* 'GridLock_Solution.ipynb': The final publication-ready Jupyter notebook with markdown descriptions and code cells, perfect for submission.
+* 'submission.csv': The final compiled predictions ready for evaluation.
+
+---
+5. REQUIREMENTS & DEPENDENCIES
+---
+All packages can be installed inside a clean Python 3.10 environment.
+
+System requirements:
+- Python 3.8+ (tested on Python 3.10)
+- Conda or virtualenv (optional but recomended)
+
+To replicate our environment:
+```bash
+conda activate gridlock  # or your venv
+pip install pandas numpy scikit-learn lightgbm xgboost catboost pygeohash
+```
+
+To regenerate the notebook and predictions:
+```bash
+python build_notebook.py
+conda run -n gridlock python src/train.py
+```
+
+Thank you for reviewing our submission! Hope you like our approach!

@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import lightgbm as lgb
 from sklearn.model_selection import KFold
-from sklearn.metrics import mean_squared_error, mean_absolute_error
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import os
 import pickle
 
@@ -92,11 +92,13 @@ def train_model():
     # Final Out-Of-Fold Evaluation
     overall_rmse = np.sqrt(mean_squared_error(train_df[target], oof_predictions))
     overall_mae = mean_absolute_error(train_df[target], oof_predictions)
+    overall_r2 = r2_score(train_df[target], oof_predictions)
     
     print("\n--- Out-Of-Fold Summary ---")
     print(f"Mean Fold RMSE: {np.mean(oof_rmses):.6f} ± {np.std(oof_rmses):.6f}")
     print(f"Overall OOF RMSE: {overall_rmse:.6f}")
     print(f"Overall OOF MAE: {overall_mae:.6f}")
+    print(f"Overall OOF R2 Score: {overall_r2:.6f}")
     
     # Save the test predictions for quick submission generation
     print("\nSaving baseline predictions...")
