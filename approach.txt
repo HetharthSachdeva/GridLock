@@ -42,21 +42,26 @@ These features create a multi-level fallback hierarchy: exact match → geohash 
 3. MODELING & VALIDATION STRATEGY
 ---
 - Validation: Use 5-fold cross-validation to estimate model performance and reduce variance.
-- Algorithm: LightGBM regression with aggressive regularization and early stopping.
-- Hyperparameters (tuned for balance between bias and variance):
-  * Learning rate: 0.02 (conservative, allows deeper trees)
-  * Num leaves: 50 (reduced complexity vs 63)
-  * Max depth: 6 (shallow trees to prevent overfitting)
-  * Subsample: 0.7 and colsample_bytree: 0.7 (strong stochastic regularization)
-  * reg_alpha: 0.5, reg_lambda: 1.0 (L1 + L2 regularization)
+- Algorithm: Ensemble of LightGBM and CatBoost regressors.
+- LightGBM hyperparameters:
+  * Learning rate: 0.02
+  * Num leaves: 50
+  * Max depth: 6
+  * Subsample: 0.7
+  * Colsample_bytree: 0.7
+  * reg_alpha: 0.5, reg_lambda: 1.0
   * Early stopping: 200 rounds on validation RMSE
-- Ensemble: Final test predictions are the mean of the 5 fold models.
+- CatBoost hyperparameters:
+  * Iterations: 3500
+  * Learning rate: 0.03
+  * Depth: 6
+  * L2 leaf regularization: 3
+  * Bagging temperature: 0.4
+  * Early stopping: 200 rounds on validation RMSE
+- Ensemble: Average predictions from LightGBM and CatBoost for each fold, then average folds for final test output.
 - Post-processing: Clip `demand` to [0.0, 1.0] to match the problem range.
 
-Current validation metrics:
-- Out-of-Fold RMSE: 0.0122 (improved from 0.0129)
-- Out-of-Fold R2: 0.9927 (99.27% variance explained)
-- Out-of-Fold MAE: 0.00390
+This updated pipeline retains the earlier engineered temporal and spatial features while adding a stronger model ensemble for improved leaderboard robustness.
 
 This pipeline balances strong historical signal with cautious regularization to avoid leaderboard overfitting.
 
